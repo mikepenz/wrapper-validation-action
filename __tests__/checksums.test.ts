@@ -5,8 +5,15 @@ import {afterEach, describe, expect, test, jest} from '@jest/globals'
 jest.setTimeout(30000)
 
 test('fetches wrapper jars checksums', async () => {
-  const validChecksums = await checksums.fetchValidChecksums(false)
+  const validChecksums = await checksums.fetchValidChecksums(false, false, [])
   expect(validChecksums.length).toBeGreaterThan(10)
+})
+
+test('fetches wrapper jars checksums only for detected versions', async () => {
+  const validChecksums = await checksums.fetchValidChecksums(false, true, [
+    '8.2.1'
+  ])
+  expect(validChecksums.length).toBe(1)
 })
 
 describe('retry', () => {
@@ -24,7 +31,11 @@ describe('retry', () => {
           code: 'ECONNREFUSED'
         })
 
-      const validChecksums = await checksums.fetchValidChecksums(false)
+      const validChecksums = await checksums.fetchValidChecksums(
+        false,
+        false,
+        []
+      )
       expect(validChecksums.length).toBeGreaterThan(10)
       nock.isDone()
     })
