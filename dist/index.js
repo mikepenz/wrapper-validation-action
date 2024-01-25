@@ -33,14 +33,15 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.fetchValidChecksums = void 0;
 const httpm = __importStar(__nccwpck_require__(5538));
 const httpc = new httpm.HttpClient('gradle/wrapper-validation-action', undefined, { allowRetries: true, maxRetries: 3 });
-async function fetchValidChecksums(allowSnapshots) {
+async function fetchValidChecksums(allowSnapshots, detectVersions, detectedVersions) {
     const all = await httpGetJsonArray('https://services.gradle.org/versions/all');
     const withChecksum = all.filter(entry => typeof entry === 'object' &&
         entry != null &&
         entry.hasOwnProperty('wrapperChecksumUrl'));
     const allowed = withChecksum.filter(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (entry) => allowSnapshots || !entry.snapshot);
+    (entry) => (allowSnapshots || !entry.snapshot) &&
+        (!detectVersions || detectedVersions.includes(entry.version)));
     const checksumUrls = allowed.map(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (entry) => entry.wrapperChecksumUrl);
@@ -91,12 +92,16 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.findWrapperJars = void 0;
+exports.detectVersions = exports.findWrapperJars = void 0;
 const util = __importStar(__nccwpck_require__(3837));
 const path = __importStar(__nccwpck_require__(1017));
 const fs = __importStar(__nccwpck_require__(7147));
+const readline = __importStar(__nccwpck_require__(4521));
 const unhomoglyph_1 = __importDefault(__nccwpck_require__(8708));
+const events_1 = __importDefault(__nccwpck_require__(2361));
+const core = __importStar(__nccwpck_require__(2186));
 const readdir = util.promisify(fs.readdir);
+const versionRegex = new RegExp(/\/gradle-(.+)-/);
 async function findWrapperJars(baseDir) {
     const files = await recursivelyListFiles(baseDir);
     return files
@@ -105,6 +110,48 @@ async function findWrapperJars(baseDir) {
         .sort((a, b) => a.localeCompare(b));
 }
 exports.findWrapperJars = findWrapperJars;
+async function detectVersions(wrapperJars) {
+    return (await Promise.all(wrapperJars.map(async (wrapperJar) => await findWrapperVersion(wrapperJar)))).filter(version => version !== undefined);
+}
+exports.detectVersions = detectVersions;
+async function findWrapperVersion(wrapperJar) {
+    const jar = path.parse(wrapperJar);
+    const properties = path.resolve(jar.dir, 'gradle-wrapper.properties');
+    if (fs.existsSync(properties)) {
+        try {
+            const lineReader = readline.createInterface({
+                input: fs.createReadStream(properties)
+            });
+            let distributionUrl = '';
+            lineReader.on('line', function (line) {
+                if (line.startsWith('distributionUrl=')) {
+                    distributionUrl = line;
+                    lineReader.close();
+                }
+            });
+            await events_1.default.once(lineReader, 'close');
+            if (distributionUrl) {
+                const matchedVersion = distributionUrl.match(versionRegex);
+                if (matchedVersion && matchedVersion.length >= 1) {
+                    return matchedVersion[1];
+                }
+                else {
+                    core.debug(`Could not parse version from distributionUrl in gradle-wrapper.properties file: ${properties}`);
+                }
+            }
+            else {
+                core.debug(`Could not identify valid distributionUrl in gradle-wrapper.properties file: ${properties}`);
+            }
+        }
+        catch (error) {
+            core.warning(`Failed to retrieve version from gradle-wrapper.properties file: ${properties} due to ${error}`);
+        }
+    }
+    else {
+        core.debug(`No gradle-wrapper.properties file existed alongside ${wrapperJar}`);
+    }
+    return undefined;
+}
 async function recursivelyListFiles(baseDir) {
     const childrenNames = await readdir(baseDir);
     const childrenPaths = await Promise.all(childrenNames.map(async (childName) => {
@@ -206,7 +253,7 @@ const core = __importStar(__nccwpck_require__(2186));
 const validate = __importStar(__nccwpck_require__(1997));
 async function run() {
     try {
-        const result = await validate.findInvalidWrapperJars(path.resolve('.'), +core.getInput('min-wrapper-count'), core.getInput('allow-snapshots') === 'true', core.getInput('allow-checksums').split(','));
+        const result = await validate.findInvalidWrapperJars(path.resolve('.'), +core.getInput('min-wrapper-count'), core.getInput('allow-snapshots') === 'true', core.getInput('allow-checksums').split(','), core.getInput('detect-version') === 'true');
         if (result.isValid()) {
             core.info(result.toDisplayString());
         }
@@ -265,14 +312,21 @@ exports.WrapperJar = exports.ValidationResult = exports.findInvalidWrapperJars =
 const find = __importStar(__nccwpck_require__(548));
 const checksums = __importStar(__nccwpck_require__(4382));
 const hash = __importStar(__nccwpck_require__(1859));
-async function findInvalidWrapperJars(gitRepoRoot, minWrapperCount, allowSnapshots, allowChecksums) {
+async function findInvalidWrapperJars(gitRepoRoot, minWrapperCount, allowSnapshots, allowChecksums, detectVersions) {
     const wrapperJars = await find.findWrapperJars(gitRepoRoot);
     const result = new ValidationResult([], []);
     if (wrapperJars.length < minWrapperCount) {
         result.errors.push(`Expected to find at least ${minWrapperCount} Gradle Wrapper JARs but got only ${wrapperJars.length}`);
     }
     if (wrapperJars.length > 0) {
-        const validChecksums = await checksums.fetchValidChecksums(allowSnapshots);
+        let detectedVersions;
+        if (detectVersions) {
+            detectedVersions = await find.detectVersions(wrapperJars);
+        }
+        else {
+            detectedVersions = [];
+        }
+        const validChecksums = await checksums.fetchValidChecksums(allowSnapshots, detectVersions, detectedVersions);
         validChecksums.push(...allowChecksums);
         for (const wrapperJar of wrapperJars) {
             const sha = await hash.sha256File(wrapperJar);
@@ -5942,6 +5996,14 @@ module.exports = require("os");
 
 "use strict";
 module.exports = require("path");
+
+/***/ }),
+
+/***/ 4521:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("readline");
 
 /***/ }),
 
