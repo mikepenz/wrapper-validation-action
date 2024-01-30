@@ -6,7 +6,8 @@ export async function findInvalidWrapperJars(
   gitRepoRoot: string,
   minWrapperCount: number,
   allowSnapshots: boolean,
-  allowChecksums: string[]
+  allowChecksums: string[],
+  detectVersions: boolean
 ): Promise<ValidationResult> {
   const wrapperJars = await find.findWrapperJars(gitRepoRoot)
   const result = new ValidationResult([], [])
@@ -16,7 +17,17 @@ export async function findInvalidWrapperJars(
     )
   }
   if (wrapperJars.length > 0) {
-    const validChecksums = await checksums.fetchValidChecksums(allowSnapshots)
+    let detectedVersions: string[]
+    if (detectVersions) {
+      detectedVersions = await find.detectVersions(wrapperJars)
+    } else {
+      detectedVersions = []
+    }
+    const validChecksums = await checksums.fetchValidChecksums(
+      allowSnapshots,
+      detectVersions,
+      detectedVersions
+    )
     validChecksums.push(...allowChecksums)
     for (const wrapperJar of wrapperJars) {
       const sha = await hash.sha256File(wrapperJar)

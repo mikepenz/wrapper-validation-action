@@ -7,7 +7,9 @@ const httpc = new httpm.HttpClient(
 )
 
 export async function fetchValidChecksums(
-  allowSnapshots: boolean
+  allowSnapshots: boolean,
+  detectVersions: boolean,
+  detectedVersions: string[]
 ): Promise<string[]> {
   const all = await httpGetJsonArray('https://services.gradle.org/versions/all')
   const withChecksum = all.filter(
@@ -18,7 +20,9 @@ export async function fetchValidChecksums(
   )
   const allowed = withChecksum.filter(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (entry: any) => allowSnapshots || !entry.snapshot
+    (entry: any) =>
+      (allowSnapshots || !entry.snapshot) &&
+      (!detectVersions || detectedVersions.includes(entry.version))
   )
   const checksumUrls = allowed.map(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
